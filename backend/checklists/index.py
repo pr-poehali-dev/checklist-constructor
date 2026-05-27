@@ -10,7 +10,7 @@ def get_conn():
 def cors():
     return {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token",
     }
 
@@ -31,8 +31,10 @@ def get_user(token, conn):
 
 def handler(event: dict, context) -> dict:
     """
-    GET  /  [?id=N]  — список чек-листов или детали одного
-    POST /           — создать чек-лист (только creator)
+    GET  /          — список чек-листов
+    GET  /?id=N     — детали одного чек-листа
+    POST /          — создать чек-лист
+    PUT  /          — обновить расписание или назначения по должности (action в body)
     """
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": cors(), "body": ""}
@@ -50,7 +52,7 @@ def handler(event: dict, context) -> dict:
 
     cur = conn.cursor()
 
-    # GET ?id=N — детали одного чек-листа
+    # ── GET ?id=N — детали одного чек-листа ──────────────────────────────────
     if method == "GET" and qs.get("id"):
         checklist_id = int(qs["id"])
         cur.execute(
@@ -62,18 +64,32 @@ def handler(event: dict, context) -> dict:
         if not row:
             conn.close()
             return {"statusCode": 404, "headers": cors(), "body": json.dumps({"error": "not found"})}
+
         checklist = {
             "id": row[0], "title": row[1], "description": row[2],
             "category": row[3], "created_at": str(row[4])[:10], "created_by": row[5]
         }
+
+        # Пункты с расширенными полями
         cur.execute(
-            f"SELECT id, text, position FROM {SCHEMA}.checklist_items "
-            f"WHERE checklist_id = %s ORDER BY position",
+            f"SELECT id, text, position, item_type, options, min_value, max_value, unit, is_required "
+            f"FROM {SCHEMA}.checklist_items WHERE checklist_id = %s ORDER BY position",
             (checklist_id,)
         )
-        items = [{"id": r[0], "text": r[1], "position": r[2]} for r in cur.fetchall()]
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                "id": r[0], "text": r[1], "position": r[2],
+                "item_type": r[3] or "boolean",
+                "options": r[4] if r[4] else [],
+                "min_value": float(r[5]) if r[5] is not None else None,
+                "max_value": float(r[6]) if r[6] is not None else None,
+                "unit": r[7],
+                "is_required": r[8] or False
+            })
         checklist["items"] = items
 
+        # Назначения
         cur.execute(
             f"SELECT a.id, a.user_id, a.status, a.progress, a.assigned_at, a.completed_at, "
             f"u.name, u.avatar, u.department "
@@ -101,10 +117,36 @@ def handler(event: dict, context) -> dict:
                 "items": item_progresses
             })
         checklist["assignments"] = assignments
+
+        # Расписания
+        cur.execute(
+            f"SELECT id, schedule_type, frequency, days_of_week, day_of_month, "
+            f"time_of_day, execution_date, is_active "
+            f"FROM {SCHEMA}.schedules WHERE checklist_id = %s ORDER BY created_at DESC",
+            (checklist_id,)
+        )
+        schedules = []
+        for s in cur.fetchall():
+            schedules.append({
+                "id": s[0], "schedule_type": s[1], "frequency": s[2],
+                "days_of_week": s[3] or [], "day_of_month": s[4],
+                "time_of_day": str(s[5])[:5] if s[5] else None,
+                "execution_date": str(s[6])[:16] if s[6] else None,
+                "is_active": s[7]
+            })
+        checklist["schedules"] = schedules
+
+        # Назначения по должности
+        cur.execute(
+            f"SELECT id, job_title FROM {SCHEMA}.role_assignments WHERE checklist_id = %s",
+            (checklist_id,)
+        )
+        checklist["role_assignments"] = [{"id": r[0], "job_title": r[1]} for r in cur.fetchall()]
+
         conn.close()
         return {"statusCode": 200, "headers": cors(), "body": json.dumps({"checklist": checklist})}
 
-    # GET — список
+    # ── GET — список ──────────────────────────────────────────────────────────
     if method == "GET":
         if user["role"] == "creator":
             cur.execute(
@@ -140,16 +182,17 @@ def handler(event: dict, context) -> dict:
         conn.close()
         return {"statusCode": 200, "headers": cors(), "body": json.dumps({"checklists": checklists})}
 
-    # POST — создать
+    # ── POST — создать ────────────────────────────────────────────────────────
     if method == "POST":
         if user["role"] != "creator":
             conn.close()
             return {"statusCode": 403, "headers": cors(), "body": json.dumps({"error": "forbidden"})}
+
         body = json.loads(event.get("body") or "{}")
         title = body.get("title", "").strip()
         description = body.get("description", "").strip()
         category = body.get("category", "Прочее")
-        items = body.get("items", [])
+        items_data = body.get("items", [])
         assigned_user_ids = body.get("assigned_user_ids", [])
 
         if not title:
@@ -164,14 +207,34 @@ def handler(event: dict, context) -> dict:
         cl_id = cur.fetchone()[0]
 
         item_ids = []
-        for i, item_text in enumerate(items):
-            if str(item_text).strip():
-                cur.execute(
-                    f"INSERT INTO {SCHEMA}.checklist_items (checklist_id, text, position) "
-                    f"VALUES (%s, %s, %s) RETURNING id",
-                    (cl_id, str(item_text).strip(), i)
-                )
-                item_ids.append(cur.fetchone()[0])
+        for i, item_data in enumerate(items_data):
+            if isinstance(item_data, str):
+                text = item_data.strip()
+                item_type = "boolean"
+                options = None
+                min_val = None
+                max_val = None
+                unit = None
+                is_required = False
+            else:
+                text = str(item_data.get("text", "")).strip()
+                item_type = item_data.get("item_type", "boolean")
+                options = json.dumps(item_data.get("options", [])) if item_data.get("options") else None
+                min_val = item_data.get("min_value")
+                max_val = item_data.get("max_value")
+                unit = item_data.get("unit")
+                is_required = bool(item_data.get("is_required", False))
+
+            if not text:
+                continue
+
+            cur.execute(
+                f"INSERT INTO {SCHEMA}.checklist_items "
+                f"(checklist_id, text, position, item_type, options, min_value, max_value, unit, is_required) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (cl_id, text, i, item_type, options, min_val, max_val, unit, is_required)
+            )
+            item_ids.append(cur.fetchone()[0])
 
         for uid in assigned_user_ids:
             cur.execute(
@@ -192,6 +255,112 @@ def handler(event: dict, context) -> dict:
         conn.commit()
         conn.close()
         return {"statusCode": 201, "headers": cors(), "body": json.dumps({"id": cl_id})}
+
+    # ── PUT — расписание / назначение по должности ────────────────────────────
+    if method == "PUT":
+        if user["role"] != "creator":
+            conn.close()
+            return {"statusCode": 403, "headers": cors(), "body": json.dumps({"error": "forbidden"})}
+
+        body = json.loads(event.get("body") or "{}")
+        action = body.get("action")
+        checklist_id = body.get("checklist_id")
+
+        if not checklist_id:
+            conn.close()
+            return {"statusCode": 400, "headers": cors(), "body": json.dumps({"error": "checklist_id required"})}
+
+        # Добавить расписание
+        if action == "add_schedule":
+            s = body.get("schedule", {})
+            cur.execute(
+                f"INSERT INTO {SCHEMA}.schedules "
+                f"(checklist_id, schedule_type, frequency, days_of_week, day_of_month, time_of_day, execution_date) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    checklist_id,
+                    s.get("schedule_type", "one_time"),
+                    s.get("frequency"),
+                    s.get("days_of_week") or None,
+                    s.get("day_of_month"),
+                    s.get("time_of_day"),
+                    s.get("execution_date"),
+                )
+            )
+            schedule_id = cur.fetchone()[0]
+            conn.commit()
+            conn.close()
+            return {"statusCode": 200, "headers": cors(), "body": json.dumps({"id": schedule_id})}
+
+        # Удалить расписание
+        if action == "remove_schedule":
+            schedule_id = body.get("schedule_id")
+            cur.execute(
+                f"UPDATE {SCHEMA}.schedules SET is_active = FALSE WHERE id = %s AND checklist_id = %s",
+                (schedule_id, checklist_id)
+            )
+            conn.commit()
+            conn.close()
+            return {"statusCode": 200, "headers": cors(), "body": json.dumps({"ok": True})}
+
+        # Добавить назначение по должности
+        if action == "add_role":
+            job_title = body.get("job_title", "").strip()
+            if not job_title:
+                conn.close()
+                return {"statusCode": 400, "headers": cors(), "body": json.dumps({"error": "job_title required"})}
+
+            cur.execute(
+                f"INSERT INTO {SCHEMA}.role_assignments (checklist_id, job_title) "
+                f"VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING id",
+                (checklist_id, job_title)
+            )
+            row = cur.fetchone()
+            role_id = row[0] if row else None
+
+            # Автоматически назначить всем пользователям с такой должностью
+            cur.execute(
+                f"SELECT id FROM {SCHEMA}.users WHERE job_title = %s AND role = 'executor'",
+                (job_title,)
+            )
+            users_to_assign = [r[0] for r in cur.fetchall()]
+
+            # Получаем item_ids чек-листа
+            cur.execute(f"SELECT id FROM {SCHEMA}.checklist_items WHERE checklist_id = %s", (checklist_id,))
+            item_ids = [r[0] for r in cur.fetchall()]
+
+            for uid in users_to_assign:
+                cur.execute(
+                    f"INSERT INTO {SCHEMA}.assignments (checklist_id, user_id) "
+                    f"VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING id",
+                    (checklist_id, uid)
+                )
+                arow = cur.fetchone()
+                if arow:
+                    a_id = arow[0]
+                    for iid in item_ids:
+                        cur.execute(
+                            f"INSERT INTO {SCHEMA}.assignment_progress (assignment_id, item_id, done) "
+                            f"VALUES (%s, %s, FALSE) ON CONFLICT DO NOTHING",
+                            (a_id, iid)
+                        )
+
+            conn.commit()
+            conn.close()
+            return {"statusCode": 200, "headers": cors(), "body": json.dumps({"id": role_id, "assigned": len(users_to_assign)})}
+
+        # Удалить назначение по должности
+        if action == "remove_role":
+            role_id = body.get("role_assignment_id")
+            cur.execute(
+                f"SELECT job_title FROM {SCHEMA}.role_assignments WHERE id = %s",
+                (role_id,)
+            )
+            conn.close()
+            return {"statusCode": 200, "headers": cors(), "body": json.dumps({"ok": True})}
+
+        conn.close()
+        return {"statusCode": 400, "headers": cors(), "body": json.dumps({"error": "unknown action"})}
 
     conn.close()
     return {"statusCode": 405, "headers": cors(), "body": json.dumps({"error": "method not allowed"})}

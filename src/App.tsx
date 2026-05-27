@@ -1,11 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
+import ItemRenderer from "@/components/ItemRenderer";
+import ItemBuilder from "@/components/ItemBuilder";
+import ScheduleBuilder from "@/components/ScheduleBuilder";
 import {
   apiLogin, apiMe, apiLogout,
-  apiGetUsers, apiGetChecklists, apiGetChecklist, apiCreateChecklist,
-  apiGetMyAssignments, apiToggleItem, apiComplete, apiGetStats,
+  apiGetUsers, apiCreateUser, apiUpdateUserJobTitle,
+  apiGetChecklists, apiGetChecklist, apiCreateChecklist,
+  apiAddSchedule, apiRemoveSchedule, apiAddRoleAssignment, apiRemoveRoleAssignment,
+  apiGetMyAssignments, apiToggleItem, apiSubmitAssignment, apiGetStats,
   type User, type ChecklistSummary, type ChecklistDetail,
-  type AssignmentDetail, type StatsData,
+  type AssignmentDetail, type StatsData, type ChecklistItemInput, type ItemResponse,
 } from "./api";
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
@@ -459,7 +464,9 @@ function CreatePage({ currentUser, onCreated }: { currentUser: User; onCreated: 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("Прочее");
-  const [itemTexts, setItemTexts] = useState<string[]>(["", ""]);
+  const [items, setItems] = useState<ChecklistItemInput[]>([
+    { text: "", item_type: "boolean", is_required: false },
+  ]);
   const [assignedIds, setAssignedIds] = useState<number[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
@@ -469,22 +476,24 @@ function CreatePage({ currentUser, onCreated }: { currentUser: User; onCreated: 
     apiGetUsers().then((u) => setAllUsers(u.filter((x) => x.role === "executor")));
   }, []);
 
-  const addItem = () => setItemTexts([...itemTexts, ""]);
-  const removeItem = (i: number) => setItemTexts(itemTexts.filter((_, idx) => idx !== i));
-  const updateItem = (i: number, val: string) => { const copy = [...itemTexts]; copy[i] = val; setItemTexts(copy); };
-  const toggleUser = (id: number) => setAssignedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const toggleUser = (id: number) =>
+    setAssignedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
   const handleSave = async () => {
     if (!title.trim()) return;
+    const validItems = items.filter((it) => it.text.trim());
+    if (validItems.length === 0) return;
     setLoading(true);
     try {
       await apiCreateChecklist({
         title: title.trim(), description: description.trim(), category,
-        items: itemTexts.filter((t) => t.trim()),
+        items: validItems,
         assigned_user_ids: assignedIds,
       });
       setSaved(true);
-      setTitle(""); setDescription(""); setItemTexts(["", ""]); setAssignedIds([]);
+      setTitle(""); setDescription("");
+      setItems([{ text: "", item_type: "boolean", is_required: false }]);
+      setAssignedIds([]);
       setTimeout(() => { setSaved(false); onCreated(); }, 1500);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Ошибка");
@@ -527,30 +536,18 @@ function CreatePage({ currentUser, onCreated }: { currentUser: User; onCreated: 
             </div>
           </div>
         </div>
+
         <div className="bg-card border border-border rounded-lg p-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">Пункты чек-листа</h2>
-            <button onClick={addItem} className="text-xs text-accent hover:text-accent/80 font-medium flex items-center gap-1 transition-colors">
-              <Icon name="Plus" size={13} />Добавить пункт
-            </button>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><Icon name="AlertCircle" size={11} className="text-destructive" /> — обязательный</span>
+            </div>
           </div>
-          <div className="space-y-2">
-            {itemTexts.map((item, i) => (
-              <div key={i} className="flex items-center gap-2.5">
-                <div className="w-5 h-5 rounded-sm border border-border flex items-center justify-center shrink-0">
-                  <span className="text-xs text-muted-foreground font-mono">{i + 1}</span>
-                </div>
-                <input value={item} onChange={(e) => updateItem(i, e.target.value)} placeholder={`Пункт ${i + 1}...`}
-                  className="flex-1 px-3 py-2 rounded-md border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition" />
-                {itemTexts.length > 1 && (
-                  <button onClick={() => removeItem(i)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
-                    <Icon name="X" size={14} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+          <p className="text-xs text-muted-foreground mb-4">Выберите тип каждого пункта: Да/Нет, Число, Один вариант, Несколько вариантов</p>
+          <ItemBuilder items={items} onChange={setItems} />
         </div>
+
         <div className="bg-card border border-border rounded-lg p-6">
           <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-4">Назначить исполнителей</h2>
           <div className="space-y-2">
@@ -565,7 +562,7 @@ function CreatePage({ currentUser, onCreated }: { currentUser: User; onCreated: 
                   <AvatarBadge initials={u.avatar} size="sm" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-foreground">{u.name}</div>
-                    <div className="text-xs text-muted-foreground">{u.department}</div>
+                    <div className="text-xs text-muted-foreground">{u.department}{u.job_title ? ` · ${u.job_title}` : ""}</div>
                   </div>
                   {selected && <Icon name="CheckCircle2" size={16} className="text-accent" />}
                 </button>
@@ -573,7 +570,9 @@ function CreatePage({ currentUser, onCreated }: { currentUser: User; onCreated: 
             })}
           </div>
         </div>
-        <button onClick={handleSave} disabled={!title.trim() || loading || itemTexts.filter((t) => t.trim()).length === 0}
+
+        <button onClick={handleSave}
+          disabled={!title.trim() || loading || items.filter((it) => it.text.trim()).length === 0}
           className="w-full bg-accent text-white py-3 rounded-md font-medium text-sm hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.99]">
           {loading ? "Создаём..." : "Создать и назначить"}
         </button>
@@ -684,8 +683,39 @@ function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newDept, setNewDept] = useState("");
+  const [newJobTitle, setNewJobTitle] = useState("");
+  const [newPassword, setNewPassword] = useState("password123");
+  const [saving, setSaving] = useState(false);
+  const [editingJobTitle, setEditingJobTitle] = useState<number | null>(null);
+  const [editJobValue, setEditJobValue] = useState("");
 
-  useEffect(() => { apiGetUsers().then((u) => setUsers(u.filter((x) => x.role === "executor"))).finally(() => setLoading(false)); }, []);
+  const reload = () => {
+    setLoading(true);
+    apiGetUsers().then((u) => setUsers(u.filter((x) => x.role === "executor"))).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const handleCreate = async () => {
+    if (!newName.trim() || !newEmail.trim()) return;
+    setSaving(true);
+    try {
+      await apiCreateUser({ name: newName.trim(), email: newEmail.trim(), password: newPassword, department: newDept, job_title: newJobTitle });
+      setNewName(""); setNewEmail(""); setNewDept(""); setNewJobTitle(""); setNewPassword("password123");
+      setShowForm(false);
+      reload();
+    } catch (e: unknown) { alert(e instanceof Error ? e.message : "Ошибка"); }
+    finally { setSaving(false); }
+  };
+
+  const handleSaveJobTitle = async (userId: number) => {
+    await apiUpdateUserJobTitle(userId, editJobValue);
+    setEditingJobTitle(null);
+    reload();
+  };
 
   return (
     <div className="p-8 animate-fade-in">
@@ -698,38 +728,73 @@ function UsersPage() {
           <Icon name="UserPlus" size={16} />Добавить сотрудника
         </button>
       </div>
+
       {showForm && (
         <div className="bg-card border border-accent/30 rounded-lg p-6 mb-6 animate-scale-in">
           <h2 className="text-sm font-semibold text-foreground mb-4">Новый сотрудник</h2>
-          <div className="grid grid-cols-3 gap-4">
-            {["Имя", "Email", "Отдел"].map((l) => (
-              <div key={l}>
-                <label className="block text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{l}</label>
-                <input className="w-full px-3.5 py-2.5 rounded-md border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition" />
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            {[
+              { label: "Имя *", val: newName, set: setNewName, ph: "Иван Иванов" },
+              { label: "Email *", val: newEmail, set: setNewEmail, ph: "ivan@corp.ru" },
+              { label: "Пароль", val: newPassword, set: setNewPassword, ph: "password123" },
+              { label: "Отдел", val: newDept, set: setNewDept, ph: "HR, ИТ…" },
+              { label: "Должность", val: newJobTitle, set: setNewJobTitle, ph: "Стажёр, Инженер…" },
+            ].map((f) => (
+              <div key={f.label}>
+                <label className="block text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{f.label}</label>
+                <input value={f.val} onChange={(e) => f.set(e.target.value)} placeholder={f.ph}
+                  className="w-full px-3.5 py-2.5 rounded-md border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition" />
               </div>
             ))}
           </div>
-          <div className="flex gap-3 mt-4">
-            <button className="bg-accent text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-accent/90 transition">Сохранить</button>
+          <p className="text-xs text-muted-foreground mb-4">
+            Если указать должность — сотруднику автоматически назначатся все чек-листы, связанные с этой должностью.
+          </p>
+          <div className="flex gap-3">
+            <button onClick={handleCreate} disabled={saving || !newName.trim() || !newEmail.trim()}
+              className="bg-accent text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-60 transition">
+              {saving ? "Создаём..." : "Создать"}
+            </button>
             <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded-md text-sm font-medium border border-border text-foreground hover:bg-muted transition">Отмена</button>
           </div>
         </div>
       )}
+
       {loading ? <Spinner /> : (
         <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <div className="px-6 py-3 border-b border-border grid grid-cols-[1fr_160px_200px_100px_80px] text-xs font-medium text-muted-foreground uppercase tracking-wide">
-            <span>Сотрудник</span><span>Отдел</span><span>Email</span><span>Назначений</span><span>Статус</span>
+          <div className="px-6 py-3 border-b border-border grid grid-cols-[1fr_130px_170px_150px_80px] text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <span>Сотрудник</span><span>Отдел</span><span>Email</span><span>Должность</span><span>Статус</span>
           </div>
           <div className="divide-y divide-border">
             {users.map((u) => (
-              <div key={u.id} className="px-6 py-4 grid grid-cols-[1fr_160px_200px_100px_80px] items-center hover:bg-muted/30 transition-colors">
+              <div key={u.id} className="px-6 py-3.5 grid grid-cols-[1fr_130px_170px_150px_80px] items-center hover:bg-muted/30 transition-colors">
                 <div className="flex items-center gap-3">
                   <AvatarBadge initials={u.avatar} size="sm" />
-                  <span className="text-sm font-medium text-foreground">{u.name}</span>
+                  <div>
+                    <div className="text-sm font-medium text-foreground">{u.name}</div>
+                    <div className="text-xs text-muted-foreground">{u.created_at}</div>
+                  </div>
                 </div>
-                <span className="text-sm text-muted-foreground">{u.department}</span>
+                <span className="text-sm text-muted-foreground">{u.department || "—"}</span>
                 <span className="text-sm text-muted-foreground truncate">{u.email}</span>
-                <span className="text-sm font-medium text-foreground">—</span>
+                <div>
+                  {editingJobTitle === u.id ? (
+                    <div className="flex items-center gap-1">
+                      <input value={editJobValue} onChange={(e) => setEditJobValue(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleSaveJobTitle(u.id)}
+                        autoFocus
+                        className="w-24 px-2 py-1 rounded border border-accent/40 bg-background text-xs text-foreground focus:outline-none" />
+                      <button onClick={() => handleSaveJobTitle(u.id)} className="text-accent hover:text-accent/80 p-1"><Icon name="Check" size={13} /></button>
+                      <button onClick={() => setEditingJobTitle(null)} className="text-muted-foreground hover:text-foreground p-1"><Icon name="X" size={13} /></button>
+                    </div>
+                  ) : (
+                    <button onClick={() => { setEditingJobTitle(u.id); setEditJobValue(u.job_title || ""); }}
+                      className="flex items-center gap-1.5 text-sm text-foreground hover:text-accent transition-colors group">
+                      <span>{u.job_title || <span className="text-muted-foreground italic">не указана</span>}</span>
+                      <Icon name="Pencil" size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </button>
+                  )}
+                </div>
                 <Badge label="Активен" color="bg-success/15 text-success border border-success/30" />
               </div>
             ))}
@@ -792,14 +857,32 @@ function ProfilePage({ currentUser, onLogout }: { currentUser: User; onLogout: (
 function ChecklistView({ checklistId }: { checklistId: number }) {
   const [cl, setCl] = useState<ChecklistDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [newRole, setNewRole] = useState("");
+  const [savingRole, setSavingRole] = useState(false);
 
-  useEffect(() => { apiGetChecklist(checklistId).then(setCl).finally(() => setLoading(false)); }, [checklistId]);
+  const reload = useCallback(() => {
+    setLoading(true);
+    apiGetChecklist(checklistId).then(setCl).finally(() => setLoading(false));
+  }, [checklistId]);
+
+  useEffect(() => { reload(); }, [reload]);
 
   if (loading) return <Spinner />;
   if (!cl) return null;
 
+  const handleAddRole = async () => {
+    if (!newRole.trim()) return;
+    setSavingRole(true);
+    try { await apiAddRoleAssignment(cl.id, newRole.trim()); setNewRole(""); reload(); }
+    finally { setSavingRole(false); }
+  };
+
+  const TYPE_LABELS: Record<string, string> = {
+    boolean: "Да/Нет", numeric: "Число", single_choice: "Один вариант", multiple_choice: "Несколько"
+  };
+
   return (
-    <div className="p-8 animate-fade-in max-w-3xl">
+    <div className="p-8 animate-fade-in max-w-4xl">
       <div className="mb-6">
         <Badge label={cl.category} color={categoryColor[cl.category] || categoryColor["Прочее"]} />
         <h1 className="text-2xl font-bold text-foreground mt-2">{cl.title}</h1>
@@ -810,41 +893,107 @@ function ChecklistView({ checklistId }: { checklistId: number }) {
           <span className="flex items-center gap-1.5"><Icon name="Users" size={12} />{cl.assignments.length} исполнителей</span>
         </div>
       </div>
-      <div className="bg-card border border-border rounded-lg p-5 mb-5">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-4">Пункты чек-листа</h2>
-        <div className="divide-y divide-border">
-          {cl.items.map((item, i) => (
-            <div key={item.id} className="flex items-center gap-3 py-2.5">
-              <span className="font-mono text-xs text-muted-foreground w-5 shrink-0">{i + 1}.</span>
-              <span className="text-sm text-foreground">{item.text}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="bg-card border border-border rounded-lg">
-        <div className="px-5 py-4 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">Прогресс по исполнителям</h2>
-        </div>
-        <div className="divide-y divide-border">
-          {cl.assignments.map((a) => (
-            <div key={a.id} className="px-5 py-4 flex items-center gap-4">
-              <AvatarBadge initials={a.user_avatar} size="sm" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium text-foreground">{a.user_name}</span>
-                  <div className="flex items-center gap-2">
-                    <Badge label={statusLabel[a.status] || a.status} color={statusColor[a.status] || ""} />
-                    <span className="text-sm font-bold text-foreground">{a.progress}%</span>
+
+      <div className="grid grid-cols-3 gap-5">
+        <div className="col-span-2 space-y-5">
+          {/* Пункты */}
+          <div className="bg-card border border-border rounded-lg p-5">
+            <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-4">Пункты чек-листа</h2>
+            <div className="divide-y divide-border">
+              {cl.items.map((item, i) => (
+                <div key={item.id} className="flex items-start gap-3 py-2.5">
+                  <span className="font-mono text-xs text-muted-foreground w-5 shrink-0 mt-0.5">{i + 1}.</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-foreground">{item.text}</div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-muted-foreground">{TYPE_LABELS[item.item_type] || item.item_type}</span>
+                      {item.unit && <span className="text-xs bg-muted px-1.5 rounded text-muted-foreground">{item.unit}</span>}
+                      {item.min_value !== null && item.max_value !== null && (
+                        <span className="text-xs text-muted-foreground">{item.min_value}–{item.max_value}</span>
+                      )}
+                      {item.is_required && <span className="text-xs text-destructive">обязательный</span>}
+                    </div>
                   </div>
                 </div>
-                <ProgressBar value={a.progress} />
-                <div className="text-xs text-muted-foreground mt-1">
-                  {a.items.filter((it) => it.done).length} из {a.items.length} пунктов
-                  {a.completed_at && ` · завершено ${a.completed_at}`}
-                </div>
-              </div>
+              ))}
             </div>
-          ))}
+          </div>
+
+          {/* Прогресс */}
+          <div className="bg-card border border-border rounded-lg">
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">Прогресс по исполнителям</h2>
+            </div>
+            <div className="divide-y divide-border">
+              {cl.assignments.length === 0 && (
+                <div className="px-5 py-6 text-center text-sm text-muted-foreground">Исполнители не назначены</div>
+              )}
+              {cl.assignments.map((a) => (
+                <div key={a.id} className="px-5 py-4 flex items-center gap-4">
+                  <AvatarBadge initials={a.user_avatar} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm font-medium text-foreground">{a.user_name}</span>
+                      <div className="flex items-center gap-2">
+                        <Badge label={statusLabel[a.status] || a.status} color={statusColor[a.status] || ""} />
+                        <span className="text-sm font-bold text-foreground">{a.progress}%</span>
+                      </div>
+                    </div>
+                    <ProgressBar value={a.progress} />
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {a.items.filter((it) => it.done).length} из {a.items.length} пунктов
+                      {a.completed_at && ` · завершено ${a.completed_at}`}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Правая колонка: расписание + должности */}
+        <div className="space-y-5">
+          <div className="bg-card border border-border rounded-lg p-5">
+            <ScheduleBuilder
+              schedules={cl.schedules}
+              checklistId={cl.id}
+              onAdd={async (s) => { await apiAddSchedule(cl.id, s); reload(); }}
+              onRemove={async (id) => { await apiRemoveSchedule(cl.id, id); reload(); }}
+            />
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">По должности</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">Чек-лист автоматически назначается всем сотрудникам с указанной должностью</p>
+            {cl.role_assignments.length > 0 && (
+              <div className="space-y-1.5 mb-3">
+                {cl.role_assignments.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between bg-muted/40 rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Icon name="Briefcase" size={13} className="text-accent" />
+                      <span className="text-xs font-medium text-foreground">{r.job_title}</span>
+                    </div>
+                    <button onClick={async () => { await apiRemoveRoleAssignment(cl.id, r.id); reload(); }}
+                      className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                      <Icon name="Trash2" size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input value={newRole} onChange={(e) => setNewRole(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddRole()}
+                placeholder="Должность…"
+                className="flex-1 px-2.5 py-1.5 rounded-md border border-border bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent/40 focus:border-accent transition" />
+              <button onClick={handleAddRole} disabled={savingRole || !newRole.trim()}
+                className="bg-accent text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-accent/90 disabled:opacity-60 transition">
+                {savingRole ? "…" : "Добавить"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -853,38 +1002,66 @@ function ChecklistView({ checklistId }: { checklistId: number }) {
 
 // ─── CHECKLIST EXECUTE (Executor) ────────────────────────────────────────────
 
-function ChecklistExecute({ checklistId, currentUser }: { checklistId: number; currentUser: User }) {
+function ChecklistExecute({ checklistId }: { checklistId: number }) {
   const [assignment, setAssignment] = useState<AssignmentDetail | null>(null);
-  const [items, setItems] = useState<{ id: number; text: string; done: boolean }[]>([]);
+  const [responses, setResponses] = useState<ItemResponse[]>([]);
   const [loading, setLoading] = useState(true);
-  const [completing, setCompleting] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
 
   useEffect(() => {
     apiGetMyAssignments().then((list) => {
       const found = list.find((a) => a.checklist_id === checklistId);
-      if (found) { setAssignment(found); setItems(found.items); }
+      if (found) {
+        setAssignment(found);
+        // Восстанавливаем прошлые ответы если есть
+        if (found.responses && found.responses.length > 0) {
+          setResponses(found.responses);
+        } else {
+          // Инициализируем дефолтными значениями
+          setResponses(found.items.map((it) => ({
+            item_id: it.id,
+            item_type: it.item_type,
+            value: it.item_type === "boolean" ? it.done : null,
+          })));
+        }
+      }
     }).finally(() => setLoading(false));
   }, [checklistId]);
 
-  const toggleItem = useCallback(async (itemId: number, done: boolean) => {
-    if (!assignment || assignment.status === "completed") return;
-    setItems((prev) => prev.map((it) => it.id === itemId ? { ...it, done } : it));
-    try {
-      const res = await apiToggleItem(assignment.assignment_id, itemId, done);
-      setAssignment((prev) => prev ? { ...prev, progress: res.progress, status: res.status } : prev);
-    } catch {
-      setItems((prev) => prev.map((it) => it.id === itemId ? { ...it, done: !done } : it));
+  const handleChange = useCallback((resp: ItemResponse) => {
+    setResponses((prev) => {
+      const idx = prev.findIndex((r) => r.item_id === resp.item_id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = resp;
+        return next;
+      }
+      return [...prev, resp];
+    });
+    setErrors([]);
+
+    // Для boolean пунктов — синхронно обновляем toggle в БД
+    if (resp.item_type === "boolean" && assignment && assignment.status !== "completed") {
+      apiToggleItem(assignment.assignment_id, resp.item_id, Boolean(resp.value))
+        .then((res) => setAssignment((prev) => prev ? { ...prev, progress: res.progress, status: res.status } : prev))
+        .catch(() => {});
     }
   }, [assignment]);
 
-  const handleComplete = async () => {
+  const handleSubmit = async () => {
     if (!assignment) return;
-    setCompleting(true);
+    setSubmitting(true);
+    setErrors([]);
     try {
-      await apiComplete(assignment.assignment_id);
-      setAssignment((prev) => prev ? { ...prev, status: "completed", progress: 100 } : prev);
+      const result = await apiSubmitAssignment(assignment.assignment_id, responses);
+      if ("errors" in result) {
+        setErrors(result.errors);
+      } else {
+        setAssignment((prev) => prev ? { ...prev, status: "completed", progress: 100 } : prev);
+      }
     } finally {
-      setCompleting(false);
+      setSubmitting(false);
     }
   };
 
@@ -896,9 +1073,27 @@ function ChecklistExecute({ checklistId, currentUser }: { checklistId: number; c
     </div>
   );
 
-  const doneCount = items.filter((i) => i.done).length;
-  const progress = items.length > 0 ? Math.round(doneCount / items.length * 100) : 0;
   const isCompleted = assignment.status === "completed";
+  const getResp = (itemId: number) => responses.find((r) => r.item_id === itemId);
+
+  // Прогресс: отвечено / всего
+  const answeredCount = assignment.items.filter((it) => {
+    const r = getResp(it.id);
+    if (!r) return false;
+    if (it.item_type === "boolean") return true;
+    return r.value !== null && r.value !== "" && !(Array.isArray(r.value) && r.value.length === 0);
+  }).length;
+  const totalItems = assignment.items.length;
+  const progress = totalItems > 0 ? Math.round(answeredCount / totalItems * 100) : 0;
+
+  // Можно ли отправить: все обязательные заполнены
+  const canSubmit = assignment.items.every((it) => {
+    if (!it.is_required) return true;
+    const r = getResp(it.id);
+    if (!r) return false;
+    if (it.item_type === "boolean") return true;
+    return r.value !== null && r.value !== "" && !(Array.isArray(r.value) && r.value.length === 0);
+  });
 
   return (
     <div className="p-8 animate-fade-in max-w-2xl">
@@ -907,41 +1102,54 @@ function ChecklistExecute({ checklistId, currentUser }: { checklistId: number; c
         <h1 className="text-2xl font-bold text-foreground mt-2">{assignment.title}</h1>
         <p className="text-muted-foreground text-sm mt-1">{assignment.description}</p>
       </div>
+
       {isCompleted && (
         <div className="flex items-center gap-3 bg-success/10 border border-success/30 text-success rounded-lg px-5 py-4 mb-6 animate-scale-in">
           <Icon name="CheckCircle2" size={22} />
           <div>
             <div className="font-semibold">Чек-лист завершён!</div>
-            <div className="text-sm opacity-80">Все пункты выполнены. Результат отправлен создателю.</div>
+            <div className="text-sm opacity-80">Ответы сохранены и отправлены создателю.</div>
           </div>
         </div>
       )}
+
+      {errors.length > 0 && (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-lg px-5 py-4 mb-5">
+          <div className="flex items-center gap-2 text-destructive font-medium text-sm mb-2">
+            <Icon name="AlertCircle" size={15} />Исправьте ошибки:
+          </div>
+          <ul className="space-y-1">
+            {errors.map((e, i) => <li key={i} className="text-xs text-destructive">{e}</li>)}
+          </ul>
+        </div>
+      )}
+
       <div className="bg-card border border-border rounded-lg p-5 mb-5">
         <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-medium text-foreground">{doneCount} из {items.length} выполнено</div>
+          <div className="text-sm font-medium text-foreground">{answeredCount} из {totalItems} заполнено</div>
           <div className="text-sm font-bold text-foreground">{progress}%</div>
         </div>
         <ProgressBar value={progress} />
       </div>
-      <div className="bg-card border border-border rounded-lg divide-y divide-border mb-5">
-        {items.map((item) => (
-          <button key={item.id} onClick={() => toggleItem(item.id, !item.done)}
-            className={`w-full flex items-center gap-4 px-5 py-4 text-left transition-colors ${isCompleted ? "cursor-default" : "hover:bg-muted/40"}`}>
-            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${item.done ? "bg-accent border-accent" : "border-border"}`}>
-              {item.done && <Icon name="Check" size={11} className="text-white" />}
-            </div>
-            <span className={`text-sm flex-1 text-left ${item.done ? "line-through text-muted-foreground" : "text-foreground"}`}>
-              {item.text}
-            </span>
-          </button>
+
+      <div className="bg-card border border-border rounded-lg mb-5">
+        {assignment.items.map((item) => (
+          <ItemRenderer
+            key={item.id}
+            item={item}
+            response={getResp(item.id)}
+            onChange={handleChange}
+            disabled={isCompleted}
+          />
         ))}
       </div>
+
       {!isCompleted && (
-        <button onClick={handleComplete} disabled={doneCount < items.length || completing}
+        <button onClick={handleSubmit} disabled={!canSubmit || submitting}
           className="w-full bg-accent text-white py-3 rounded-md font-medium text-sm hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.99]">
-          {completing ? "Завершаем..." : doneCount < items.length
-            ? `Выполните все пункты (осталось ${items.length - doneCount})`
-            : "Завершить чек-лист"}
+          {submitting ? "Сохраняем..." : !canSubmit
+            ? "Заполните все обязательные поля (*)"
+            : "Завершить и отправить отчёт"}
         </button>
       )}
     </div>
@@ -996,7 +1204,7 @@ export default function App() {
       case "checklist-view":
         return viewId ? <ChecklistView checklistId={viewId} /> : null;
       case "checklist-execute":
-        return viewId ? <ChecklistExecute checklistId={viewId} currentUser={currentUser} /> : null;
+        return viewId ? <ChecklistExecute checklistId={viewId} /> : null;
       default:
         return null;
     }

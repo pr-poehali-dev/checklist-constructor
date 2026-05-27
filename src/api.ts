@@ -26,7 +26,8 @@ async function request<T>(fn: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
-// AUTH
+// ── AUTH ──────────────────────────────────────────────────────────────────────
+
 export async function apiLogin(email: string, password: string) {
   const data = await request<{ token: string; user: User }>("auth", {
     method: "POST",
@@ -46,20 +47,39 @@ export async function apiMe(): Promise<User | null> {
 }
 
 export async function apiLogout() {
-  await request("auth", {
-    method: "POST",
-    body: JSON.stringify({ action: "logout" }),
-  });
+  await request("auth", { method: "POST", body: JSON.stringify({ action: "logout" }) });
   localStorage.removeItem("cf_token");
 }
 
-// USERS
+// ── USERS ─────────────────────────────────────────────────────────────────────
+
 export async function apiGetUsers(): Promise<User[]> {
   const data = await request<{ users: User[] }>("users");
   return data.users;
 }
 
-// CHECKLISTS
+export async function apiGetJobTitles(): Promise<string[]> {
+  const url = URLS["users"] + "?job_titles=1";
+  const res = await fetch(url, { headers: authHeaders() });
+  const data = await res.json();
+  return data.job_titles || [];
+}
+
+export async function apiCreateUser(payload: {
+  name: string; email: string; password: string; department: string; job_title: string;
+}) {
+  return request<{ id: number }>("users", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function apiUpdateUserJobTitle(user_id: number, job_title: string) {
+  return request<{ ok: boolean }>("users", {
+    method: "PUT",
+    body: JSON.stringify({ user_id, job_title }),
+  });
+}
+
+// ── CHECKLISTS ────────────────────────────────────────────────────────────────
+
 export async function apiGetChecklists(): Promise<ChecklistSummary[]> {
   const data = await request<{ checklists: ChecklistSummary[] }>("checklists");
   return data.checklists;
@@ -77,16 +97,42 @@ export async function apiCreateChecklist(payload: {
   title: string;
   description: string;
   category: string;
-  items: string[];
+  items: ChecklistItemInput[];
   assigned_user_ids: number[];
 }) {
+  return request<{ id: number }>("checklists", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function apiAddSchedule(checklist_id: number, schedule: ScheduleInput) {
   return request<{ id: number }>("checklists", {
-    method: "POST",
-    body: JSON.stringify(payload),
+    method: "PUT",
+    body: JSON.stringify({ action: "add_schedule", checklist_id, schedule }),
   });
 }
 
-// ASSIGNMENTS
+export async function apiRemoveSchedule(checklist_id: number, schedule_id: number) {
+  return request<{ ok: boolean }>("checklists", {
+    method: "PUT",
+    body: JSON.stringify({ action: "remove_schedule", checklist_id, schedule_id }),
+  });
+}
+
+export async function apiAddRoleAssignment(checklist_id: number, job_title: string) {
+  return request<{ id: number; assigned: number }>("checklists", {
+    method: "PUT",
+    body: JSON.stringify({ action: "add_role", checklist_id, job_title }),
+  });
+}
+
+export async function apiRemoveRoleAssignment(checklist_id: number, role_assignment_id: number) {
+  return request<{ ok: boolean }>("checklists", {
+    method: "PUT",
+    body: JSON.stringify({ action: "remove_role", checklist_id, role_assignment_id }),
+  });
+}
+
+// ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
+
 export async function apiGetMyAssignments(): Promise<AssignmentDetail[]> {
   const data = await request<{ assignments: AssignmentDetail[] }>("assignments");
   return data.assignments;
@@ -99,19 +145,85 @@ export async function apiToggleItem(assignment_id: number, item_id: number, done
   });
 }
 
-export async function apiComplete(assignment_id: number) {
-  return request<{ ok: boolean }>("assignments", {
+export async function apiSubmitAssignment(
+  assignment_id: number,
+  responses: ItemResponse[]
+): Promise<{ ok: boolean } | { errors: string[] }> {
+  const res = await fetch(URLS["assignments"], {
     method: "POST",
-    body: JSON.stringify({ action: "complete", assignment_id }),
+    headers: authHeaders(),
+    body: JSON.stringify({ action: "submit", assignment_id, responses }),
   });
+  const data = await res.json();
+  if (res.status === 422) return { errors: data.errors };
+  if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+  return data;
 }
 
-// STATS
+// ── STATS ─────────────────────────────────────────────────────────────────────
+
 export async function apiGetStats(): Promise<StatsData> {
   return request<StatsData>("stats");
 }
 
-// TYPES
+// ── TYPES ─────────────────────────────────────────────────────────────────────
+
+export type ItemType = "boolean" | "numeric" | "single_choice" | "multiple_choice";
+
+export interface ChecklistItemInput {
+  text: string;
+  item_type: ItemType;
+  options?: { text: string; value: string }[];
+  min_value?: number | null;
+  max_value?: number | null;
+  unit?: string;
+  is_required?: boolean;
+}
+
+export interface ChecklistItem {
+  id: number;
+  text: string;
+  position: number;
+  item_type: ItemType;
+  options: { text: string; value: string }[];
+  min_value: number | null;
+  max_value: number | null;
+  unit: string | null;
+  is_required: boolean;
+  done?: boolean;
+}
+
+export interface ItemResponse {
+  item_id: number;
+  item_type: ItemType;
+  value: boolean | number | string | string[] | null;
+}
+
+export interface ScheduleInput {
+  schedule_type: "recurring" | "one_time";
+  frequency?: "daily" | "weekly" | "monthly";
+  days_of_week?: number[];
+  day_of_month?: number;
+  time_of_day?: string;
+  execution_date?: string;
+}
+
+export interface Schedule {
+  id: number;
+  schedule_type: "recurring" | "one_time";
+  frequency: string | null;
+  days_of_week: number[];
+  day_of_month: number | null;
+  time_of_day: string | null;
+  execution_date: string | null;
+  is_active: boolean;
+}
+
+export interface RoleAssignment {
+  id: number;
+  job_title: string;
+}
+
 export interface User {
   id: number;
   name: string;
@@ -119,6 +231,7 @@ export interface User {
   role: "creator" | "executor";
   department: string;
   avatar: string;
+  job_title?: string;
 }
 
 export interface ChecklistSummary {
@@ -140,8 +253,10 @@ export interface ChecklistDetail {
   category: string;
   created_at: string;
   created_by: number;
-  items: { id: number; text: string; position: number }[];
+  items: ChecklistItem[];
   assignments: AssignmentInChecklist[];
+  schedules: Schedule[];
+  role_assignments: RoleAssignment[];
 }
 
 export interface AssignmentInChecklist {
@@ -167,7 +282,8 @@ export interface AssignmentDetail {
   title: string;
   description: string;
   category: string;
-  items: { id: number; text: string; done: boolean }[];
+  items: ChecklistItem[];
+  responses: ItemResponse[];
 }
 
 export interface StatsData {

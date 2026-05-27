@@ -1,0 +1,27 @@
+{
+  "name": "CheckFlow",
+  "short_name": "CheckFlow",
+  "description": "Корпоративные чек-листы",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "https://cdn.poehali.dev/projects/fd6ec67b-7597-43c8-9b7b-aa2a06f56663/files/c9a8af82-f0c3-4c94-bee7-eb0ceb597c4b.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn.poehali.dev/projects/fd6ec67b-7597-43c8-9b7b-aa2a06f56663/files/c9a8af82-f0c3-4c94-bee7-eb0ceb597c4b.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [],
+  "categories": ["productivity", "business"]
+}

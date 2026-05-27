@@ -3,6 +3,13 @@ import Icon from "@/components/ui/icon";
 import ItemRenderer from "@/components/ItemRenderer";
 import ItemBuilder from "@/components/ItemBuilder";
 import ScheduleBuilder from "@/components/ScheduleBuilder";
+import MobileApp from "./MobileApp";
+
+// Определяем мобильное устройство
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+    || window.innerWidth < 768;
+}
 import {
   apiLogin, apiMe, apiLogout,
   apiGetUsers, apiCreateUser, apiUpdateUserJobTitle,
@@ -1159,6 +1166,15 @@ function ChecklistExecute({ checklistId }: { checklistId: number }) {
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [isMobile] = useState(() => isMobileDevice());
+
+  // Мобильные устройства и исполнители → мобильный интерфейс
+  if (isMobile) return <MobileApp />;
+
+  return <DesktopApp />;
+}
+
+function DesktopApp() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [page, setPage] = useState<Page>("home");

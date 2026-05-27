@@ -150,4 +150,51 @@
   .stat-card {
     border-left: 3px solid hsl(var(--accent));
   }
+
+  /* ─── Mobile PWA utilities ─── */
+
+  /* Safe area insets для iPhone с челкой */
+  .pt-safe {
+    padding-top: max(1rem, env(safe-area-inset-top));
+  }
+  .pb-safe {
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  }
+
+  /* Скрываем скроллбар в хром-карусели точек */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Запрещаем выделение текста на мобильных кнопках */
+  button {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  /* PWA: убираем bounce-скролл на iOS при standalone */
+  @media (display-mode: standalone) {
+    html {
+      overscroll-behavior: none;
+    }
+  }
+
+  /* Мобильный slide-up для bottom sheet */
+  @keyframes mobileSlideUp {
+    from {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  .animate-slide-up {
+    animation: mobileSlideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
 }

@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "GET stats without token",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 403,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}
